@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>MAPID Map</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.0.0/dist/maplibre-gl.css">
+
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        #map-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            min-height: 100vh;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        #map-loading {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #F7F9FC;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 999;
+            transition: opacity 0.3s ease;
+        }
+
+        #map-loading .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #E0E0E0;
+            border-top-color: #3E81F3;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .maplibregl-ctrl-attrib {
+            font-size: 0;
+        }
+
+        .maplibregl-ctrl-attrib .maplibregl-ctrl-attrib-inner {
+            font-size: 0;
+        }
+
+        .maplibregl-ctrl-attrib button {
+            font-size: 14px !important;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="map-container">
+        <div id="map"></div>
+        <div id="map-loading">
+            <div class="spinner"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.0.0/dist/maplibre-gl.mjs';
+
+
+        // ==========================================
+        // AMBIL KOORDINAT DARI URL
+        // ==========================================
+
+        const urlParams = new URLSearchParams(window.location.search);
+
+        const rawLat = urlParams.get('lat');
+        const rawLong = urlParams.get('long');
+
+        const hasLocation =
+            rawLat !== null &&
+            rawLong !== null &&
+            !isNaN(Number(rawLat)) &&
+            !isNaN(Number(rawLong));
+
+        const lat = hasLocation ? Number(rawLat) : null;
+        const long = hasLocation ? Number(rawLong) : null;
+
+
+        // ==========================================
+        // TENTUKAN CENTER DAN ZOOM
+        // ==========================================
+
+        const mapCenter = hasLocation ? [long, lat] : [110.3667762, -7.7913247];
+
+        const mapZoom = hasLocation ? 18 : 13;
+
+        // ==========================================
+        // BUAT MAP
+        // ==========================================
+
+        const map = new maplibregl.Map({
+            container: 'map',
+            style: 'https://v2.basemap.mapid.io/styles/street-v2.0/style.json?key={{ env('MAPID_API_KEY') }}',
+            center: mapCenter,
+            zoom: mapZoom,
+        });
+
+        function hideLoading() {
+            const mapEl = document.getElementById('map');
+            const loadingEl = document.getElementById('map-loading');
+
+            mapEl.style.opacity = '1';
+
+            if (loadingEl) {
+                loadingEl.style.opacity = '0';
+                setTimeout(() => loadingEl.remove(), 300);
+            }
+        }
+
+        // Fallback — kalau semua proses gagal/lambat banget,
+        // spinner tetap ke-hide otomatis daripada nyangkut selamanya
+        setTimeout(hideLoading, 8000);
+
+        // ==========================================
+        // DATA HALTE
+        // ==========================================
+
+        let allFeatures = [];
+
+        // Filter yang datang sebelum source siap
+        let pendingFilters = null;
+
+        // Filter aktif
+        let currentFilters = [];
+
+        // ==========================================
+        // MARKER HALTE YANG DIPILIH
+        // ==========================================
+
+        if (hasLocation) {
+
+            new maplibregl.Marker({
+                    color: '#EC2735'
+                })
+                .setLngLat([long, lat])
+                .addTo(map);
+
+        }
+
+        // ==========================================
+        // FUNGSI FILTER
+        // ==========================================
+
+        function applyFilter(filters) {
+            currentFilters = filters;
+
+            const source = map.getSource('haltes');
+
+            if (!source) {
+                pendingFilters = filters;
+                return;
+            }
+
+            updateVisibleHaltes();
+
+            console.log(
+                `🔎 Filter: ${filters.join(', ') || 'tidak ada filter'}`
+            );
+        }
+
+        // ==========================================
+        // FILTER HALTE SESUAI AREA MAP
+        // ==========================================
+        function updateVisibleHaltes() {
+            const source = map.getSource('haltes');
+
+            if (!source || allFeatures.length === 0) {
+                return;
+            }
+
+            const bounds = map.getBounds();
+
+            const visibleFeatures = allFeatures.filter((feature) => {
+                const [long, lat] = feature.geometry.coordinates;
+
+                if (!bounds.contains([long, lat])) {
+                    return false;
+                }
+
+                const kelas = feature.properties.kelas;
+
+                if (currentFilters.length === 0) {
+                    return false;
+                }
+
+                return currentFilters.some((filter) => {
+                    if (filter === 'sangat') {
+                        return kelas === 'Sangat Aksesibel';
+                    }
+
+                    if (filter === 'cukup') {
+                        return kelas === 'Cukup Aksesibel';
+                    }
+
+                    if (filter === 'kurang') {
+                        return kelas === 'Kurang Aksesibel';
+                    }
+
+                    if (filter === 'tidak') {
+                        return (
+                            kelas === 'Tidak Aksesibel' ||
+                            kelas === 'Tidak tersedia' ||
+                            !kelas
+                        );
+                    }
+
+                    return false;
+                });
+            });
+
+            source.setData({
+                type: 'FeatureCollection',
+                features: visibleFeatures
+            });
+
+            window.parent.postMessage({
+                    type: 'VISIBLE_HALTES',
+                    ids: visibleFeatures.map(
+                        (feature) => Number(feature.properties.id)
+                    )
+                },
+                '*'
+            );
+
+            console.log(
+                `📍 Halte dalam viewport: ${visibleFeatures.length}/${allFeatures.length}`
+            );
+        }
+
+        // ==========================================
+        // MAP SELESAI LOADING
+        // ==========================================
+
+        map.on('load', async () => {
+            map.resize();
+
+            try {
+
+                const response = await fetch('/api/haltes');
+
+                const result = await response.json();
+
+                console.log(
+                    'DATA HALTE DATABASE:',
+                    result
+                );
+
+                const haltes = result.data || [];
+
+                console.log(
+                    'JUMLAH HALTE DATABASE:',
+                    haltes.length
+                );
+
+                const geojson = {
+
+                    type: 'FeatureCollection',
+
+                    features: haltes
+
+                        .filter(
+                            halte =>
+                            halte.lat &&
+                            halte.long
+                        )
+
+                        .map((halte) => ({
+
+                            type: 'Feature',
+
+                            geometry: {
+
+                                type: 'Point',
+
+                                coordinates: [
+
+                                    Number(halte.long),
+
+                                    Number(halte.lat)
+
+                                ]
+
+                            },
+
+                            properties: {
+
+                                id: halte.id,
+
+                                nama: halte.nama,
+
+                                id_mapid: halte.id_mapid,
+
+                                kelas: halte.kelas,
+                                foto: halte.foto || halte.foto_url || halte.image || null,
+                                color: halte.kelas === 'Sangat Aksesibel' ? '#1FC16B' : halte
+                                    .kelas === 'Cukup Aksesibel' ? '#F5BD4F' : halte.kelas ===
+                                    'Kurang Aksesibel' ? '#EC2735' : '#999999'
+                            }
+                        }))
+                };
+
+                allFeatures = geojson.features;
+
+                // Cuma flyTo ke rata-rata semua halte KALAU gak ada
+                // lokasi spesifik dari search (biar hasil klik dari Home
+                // tetap zoom ke marker-nya, gak ke-reset)
+                if (!hasLocation && allFeatures.length > 0) {
+                    const total = allFeatures.length;
+
+                    const centerLong =
+                        allFeatures.reduce(
+                            (sum, feature) => sum + feature.geometry.coordinates[0],
+                            0
+                        ) / total;
+
+                    const centerLat =
+                        allFeatures.reduce(
+                            (sum, feature) => sum + feature.geometry.coordinates[1],
+                            0
+                        ) / total;
+
+                    map.flyTo({
+                        center: [centerLong, centerLat],
+                        zoom: 13,
+                        essential: true
+                    });
+                }
+
+                map.addSource('haltes', {
+                    type: 'geojson',
+                    data: {
+                        type: 'FeatureCollection',
+                        features: []
+                    }
+                });
+
+                map.addLayer({
+
+                    id: 'haltes-point',
+                    type: 'circle',
+                    source: 'haltes',
+                    paint: {
+                        'circle-radius': 7,
+                        'circle-color': ['get', 'color'],
+                        'circle-stroke-width': 2,
+                        'circle-stroke-color': '#ffffff'
+                    }
+                });
+
+                // ==========================================
+                // DATA RUTE TRANS JOGJA
+                // ==========================================
+                const responseJalur = await fetch('/api/map/jalur');
+                const resultJalur = await responseJalur.json();
+
+                console.log('🚌 DATA RUTE TRANS JOGJA:', resultJalur);
+
+                map.addSource('jalur-trans-jogja', {
+                    type: 'geojson',
+                    data: resultJalur
+                });
+
+                map.addLayer({
+                    id: 'jalur-trans-jogja-line',
+                    type: 'line',
+                    source: 'jalur-trans-jogja',
+                    layout: {
+                        'line-join': 'round',
+                        'line-cap': 'round',
+                        'visibility': 'none'
+                    },
+                    paint: {
+                        'line-color': [
+                            'match',
+                            ['get', 'jalur'],
+                            '1A', '#E91E63',
+                            '1B', '#9C27B0',
+                            '2A', '#FF9800',
+                            '2B', '#795548',
+                            '3A', '#4CAF50',
+                            '3B', '#00BCD4',
+                            '4A', '#F44336',
+                            '5A', '#8BC34A',
+                            '6A', '#FF5722',
+                            '7', '#673AB7',
+                            '8', '#FFC107',
+                            '9', '#009688',
+                            '#666666'
+                        ],
+                        'line-width': 4,
+                        'line-opacity': 0.85
+                    }
+                });
+
+                // KLIK TITIK HALTE
+                map.on('click', 'haltes-point', (e) => {
+                    const feature = e.features?.[0];
+
+                    if (!feature) return;
+
+                    window.parent.postMessage({
+                            type: 'HALTE_CLICKED',
+                            id: Number(feature.properties.id)
+                        },
+                        '*'
+                    );
+                });
+
+                // Cursor jadi pointer saat diarahkan ke titik halte
+                map.on('mouseenter', 'haltes-point', () => {
+                    map.getCanvas().style.cursor = 'pointer';
+                });
+
+                map.on('mouseleave', 'haltes-point', () => {
+                    map.getCanvas().style.cursor = '';
+                });
+
+                if (pendingFilters !== null) {
+
+                    applyFilter(
+                        pendingFilters
+                    );
+
+                    pendingFilters = null;
+
+                }
+                updateVisibleHaltes();
+
+                console.log(
+                    '✅ TITIK HALTE DATABASE BERHASIL DITAMPILKAN'
+                );
+
+                // Pasang listener idle DI SINI — setelah flyTo (kalau ada)
+                // dipanggil, supaya nunggu tile hasil flyTo beneran selesai
+                map.once('idle', hideLoading);
+
+            } catch (error) {
+
+                console.error(
+                    '❌ GAGAL MENGAMBIL DATA HALTE:',
+                    error
+                );
+
+                hideLoading();
+
+            }
+
+        });
+
+        // ==========================================
+        // UPDATE HALTE SAAT MAP DIGESER / DI-ZOOM
+        // ==========================================
+        map.on('moveend', () => {
+            updateVisibleHaltes();
+        });
+
+
+        // ==========================================
+        // TERIMA PESAN / FILTER DARI REACT
+        // ==========================================
+        window.addEventListener('message', (event) => {
+            if (!event.data) return;
+
+            const {
+                type
+            } = event.data;
+
+            // 1. Cari Lokasi (Search Location)
+            if (type === 'SEARCH_LOCATION') {
+                const lat = Number(event.data.lat);
+                const long = Number(event.data.long);
+                if (Number.isFinite(lat) && Number.isFinite(long)) {
+                    map.flyTo({
+                        center: [long, lat],
+                        zoom: 15,
+                        essential: true
+                    });
+                }
+                return;
+            }
+
+            // 2. Tampilkan Posisi Pengguna (User Location)
+            if (type === 'USER_LOCATION') {
+                const lat = Number(event.data.lat);
+                const long = Number(event.data.long);
+
+                if (!Number.isFinite(lat) || !Number.isFinite(long)) {
+                    return;
+                }
+
+                new maplibregl.Marker({
+                        color: '#0063F3'
+                    })
+                    .setLngLat([long, lat])
+                    .addTo(map);
+
+                map.flyTo({
+                    center: [long, lat],
+                    zoom: 16,
+                    essential: true
+                });
+
+                console.log('📍 POSISI PENGGUNA DI MAP:', lat, long);
+                return;
+            }
+
+            // 3. Hitung Rute Jalan Kaki ke Halte (OSRM Routing)
+            if (type === 'ROUTE_TO_HALTE') {
+                const userLat = Number(event.data.userLat);
+                const userLong = Number(event.data.userLong);
+                const halteLat = Number(event.data.halteLat);
+                const halteLong = Number(event.data.halteLong);
+
+                if (
+                    !Number.isFinite(userLat) ||
+                    !Number.isFinite(userLong) ||
+                    !Number.isFinite(halteLat) ||
+                    !Number.isFinite(halteLong)
+                ) {
+                    console.error('❌ Koordinat tidak valid');
+                    return;
+                }
+
+                const url = `https://routing.openstreetmap.de/routed-foot/route/v1/driving/` +
+                    `${userLong},${userLat};${halteLong},${halteLat}` +
+                    `?overview=full&geometries=geojson&steps=true&alternatives=true`;
+
+                console.log('🚶 REQUEST OSRM:', url);
+
+                fetch(url)
+                    .then((response) => response.json())
+                    .then((result) => {
+                        console.log('🚶 HASIL OSRM:', result);
+
+                        if (result.code !== 'Ok' || !result.routes?.length) {
+                            console.error('❌ Rute tidak ditemukan:', result);
+                            return;
+                        }
+
+                        const route = result.routes[0];
+
+                        // GAMBAR RUTE DI MAP
+                        const routeGeoJSON = {
+                            type: 'Feature',
+                            properties: {},
+                            geometry: route.geometry
+                        };
+
+                        if (map.getSource('walking-route')) {
+                            map.getSource('walking-route').setData(routeGeoJSON);
+                        } else {
+                            map.addSource('walking-route', {
+                                type: 'geojson',
+                                data: routeGeoJSON
+                            });
+
+                            map.addLayer({
+                                id: 'walking-route-line',
+                                type: 'line',
+                                source: 'walking-route',
+                                layout: {
+                                    'line-join': 'round',
+                                    'line-cap': 'round'
+                                },
+                                paint: {
+                                    'line-color': '#3E81F3',
+                                    'line-width': 5,
+                                    'line-opacity': 0.9
+                                }
+                            });
+                        }
+
+                        // ZOOM KE SELURUH RUTE
+                        const coordinates = route.geometry.coordinates;
+
+                        const bounds = coordinates.reduce(
+                            (bounds, coordinate) => bounds.extend(coordinate),
+                            new maplibregl.LngLatBounds(coordinates[0], coordinates[0])
+                        );
+
+                        map.fitBounds(bounds, {
+                            padding: 80,
+                            maxZoom: 17
+                        });
+
+                        console.log('📏 Jarak:', (route.distance / 1000).toFixed(2), 'km');
+                        console.log('⏱️ Waktu:', Math.round(route.duration / 60), 'menit');
+                    })
+                    .catch((error) => {
+                        console.error('❌ GAGAL MENGAMBIL RUTE OSRM:', error);
+                    });
+
+                return;
+            }
+
+            // 4. Saring Aksesibilitas (Filter Accessibility)
+            if (type === 'FILTER_ACCESSIBILITY') {
+                const filters = event.data.filters || [];
+                console.log('📩 FILTER DITERIMA:', filters);
+                applyFilter(filters);
+                return;
+            }
+        });
+    </script>
+
+</body>
+
+</html>
